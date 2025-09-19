@@ -1,9 +1,14 @@
 package com.example.eeg_v0
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -46,8 +51,8 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (allPermissionsGranted) {
-                Toast.makeText(this, "Permissões concedidas. Iniciando o escaneamento.", Toast.LENGTH_SHORT).show()
-                startBluetoothSearch()
+                Toast.makeText(this, "Permissões concedidas.", Toast.LENGTH_SHORT).show()
+
             } else {
                 Toast.makeText(this, "Permissões de Bluetooth negadas. Não é possível escanear dispositivos.", Toast.LENGTH_LONG).show()
             }
@@ -122,9 +127,45 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startBluetoothSearch() {
-        // Você pode chamar a lógica de escaneamento de um BroadcastReceiver aqui
-        Toast.makeText(this, "Iniciando escaneamento... (Adicione sua lógica aqui)", Toast.LENGTH_LONG).show()
+    val foundDevices: MutableList<String> = mutableListOf()
+    val receiver = object : BroadcastReceiver() {
+        @SuppressLint("MissingPermission")
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                BluetoothDevice.ACTION_FOUND -> {
+                    val device: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    device?.let {
+                        val deviceName = it.name ?: "Dispositivo Desconhecido"
+                        val deviceAddress = it.address
+                        val deviceInfo = "$deviceName ($deviceAddress)"
+
+                        if (!foundDevices.contains(deviceInfo)) {
+                            foundDevices.add(deviceInfo)
+                            Toast.makeText(context, "Dispositivo encontrado: $deviceName", Toast.LENGTH_SHORT).show()
+                            // TODO: Adicionar lógica para atualizar a lista de dispositivos na sua UI
+                        }
+                    }
+                }
+            }
+        }
 
     }
+    override fun onDestroy() {
+        super.onDestroy()
+        unregisterReceiver(receiver)
+    }
+    @SuppressLint("MissingPermission")
+    private fun startBluetoothSearch() {
+
+        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
+
+        registerReceiver(receiver, filter)
+        foundDevices.clear()
+        bluetoothAdapter?.startDiscovery()
+
+        Toast.makeText(this, "Iniciando busca por dispositivos Bluetooth...", Toast.LENGTH_LONG).show()
+
+    }
+
+
 }
