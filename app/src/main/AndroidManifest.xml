@@ -12,6 +12,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.EEG_V0">
         <activity
+            android:name=".view"
+            android:exported="false" />
+        <activity
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
