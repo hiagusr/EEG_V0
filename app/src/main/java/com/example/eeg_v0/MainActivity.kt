@@ -1,10 +1,8 @@
 package com.example.eeg_v0
 
 import android.Manifest
-import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -23,12 +21,12 @@ class MainActivity : AppCompatActivity() {
     private var isBluetoothConnected: Boolean = false
 
     // Gerenciadores Bluetooth
-    private val bluetoothManager: BluetoothManager by lazy { getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager }
+    private val bluetoothManager: BluetoothManager by lazy { getSystemService(BLUETOOTH_SERVICE) as BluetoothManager }
     private val bluetoothAdapter: BluetoothAdapter? by lazy { bluetoothManager.adapter }
 
     // Launcher para ativar o Bluetooth, usando a API moderna
     private val enableBtLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
+        if (result.resultCode == RESULT_OK) {
             Toast.makeText(this, "Bluetooth ativado.", Toast.LENGTH_SHORT).show()
             // Prossiga para verificar as permissões de escaneamento
             checkPermissionsAndStartScan()
