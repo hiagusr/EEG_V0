@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package com.example.eeg_v0
 
 import android.Manifest
@@ -12,6 +14,9 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
+import android.widget.ArrayAdapter
+import android.widget.ListView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -23,44 +28,53 @@ import com.example.eeg_v0.databinding.ActivityMainBinding
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    private var isBluetoothConnected: Boolean = false
+    private var isBluetoothConnected: Boolean = false // Você usará isso para lógica de conexão real
 
-    // Gerenciadores Bluetooth
     private val bluetoothManager: BluetoothManager by lazy { getSystemService(BLUETOOTH_SERVICE) as BluetoothManager }
     private val bluetoothAdapter: BluetoothAdapter? by lazy { bluetoothManager.adapter }
 
-    // Launcher para ativar o Bluetooth, usando a API moderna
+    // Lista para armazenar os dispositivos Bluetooth encontrados (objetos BluetoothDevice)
+    private val discoveredDevicesList: MutableList<BluetoothDevice> = mutableListOf()
+    // ArrayAdapter para a ListView
+    private lateinit var devicesArrayAdapter: ArrayAdapter<String>
+    // Lista de strings (Nome + Endereço MAC) para popular o ArrayAdapter
+    private val deviceListStrings: MutableList<String> = mutableListOf()
+
+    companion object {
+        private const val TAG = "MainActivity"
+    }
+
     private val enableBtLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK) {
             Toast.makeText(this, "Bluetooth ativado.", Toast.LENGTH_SHORT).show()
-            // Prossiga para verificar as permissões de escaneamento
             checkPermissionsAndStartScan()
         } else {
             Toast.makeText(this, "Falha ao ativar o Bluetooth.", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // Launcher para solicitar múltiplas permissões
     private val requestMultiplePermissionsLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-            var allPermissionsGranted = true
-            permissions.entries.forEach {
-                if (!it.value) {
-                    allPermissionsGranted = false
-                }
-            }
+            val fineLocationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
+            val bluetoothScanGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) permissions[Manifest.permission.BLUETOOTH_SCAN] ?: false else true
+            val bluetoothConnectGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) permissions[Manifest.permission.BLUETOOTH_CONNECT] ?: false else true
 
-            if (allPermissionsGranted) {
+            if (fineLocationGranted && bluetoothScanGranted && bluetoothConnectGranted) {
                 Toast.makeText(this, "Permissões concedidas.", Toast.LENGTH_SHORT).show()
-
+                startBluetoothSearch() // Inicia a busca após conceder permissões
             } else {
-                Toast.makeText(this, "Permissões de Bluetooth negadas. Não é possível escanear dispositivos.", Toast.LENGTH_LONG).show()
+                var message = "Permissão(ões) negada(s):"
+                if (!fineLocationGranted) message += "\n- Localização Precisa"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    if (!bluetoothScanGranted) message += "\n- Escaneamento Bluetooth"
+                    if (!bluetoothConnectGranted) message += "\n- Conexão Bluetooth"
+                }
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
             }
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -70,102 +84,154 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
+        // Inicializa o ArrayAdapter e a ListView
+        devicesArrayAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, deviceListStrings)
+        binding.bleDeviceListView.adapter = devicesArrayAdapter
+
+        binding.bleDeviceListView.setOnItemClickListener { _, _, position, _ ->
+            // Cancela a descoberta, pois é intensiva e não é necessária ao tentar conectar
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                 bluetoothAdapter?.cancelDiscovery()
+            }
+
+            val selectedDevice = discoveredDevicesList[position]
+            // Aqui você obteria o MAC address se necessário: selectedDevice.address
+            // E o nome: selectedDevice.name
+            Toast.makeText(this, "Selecionado: ${selectedDevice.name ?: "Dispositivo Desconhecido"} - ${selectedDevice.address}", Toast.LENGTH_SHORT).show()
+            Log.d(TAG, "Dispositivo selecionado: ${selectedDevice.name}, MAC: ${selectedDevice.address}")
+
+            // TODO: Iniciar a lógica de conexão com selectedDevice
+            // Por exemplo: connectToDevice(selectedDevice)
+            // Atualize isBluetoothConnected = true após conexão bem sucedida
+        }
+
         binding.button.setOnClickListener {
             if (isBluetoothConnected) {
-                // Aqui você vai para a próxima tela se já estiver conectado
                 val intent = Intent(this, ViewScreen::class.java)
                 startActivity(intent)
             } else {
-                // Se não, inicie o processo de verificação de Bluetooth e permissões
+                devicesArrayAdapter.clear() // Limpa a lista antes de um novo scan
+                discoveredDevicesList.clear()
                 checkAndEnableBluetooth()
             }
         }
+
+        // Registra o BroadcastReceiver para eventos de descoberta de Bluetooth
+        val filter = IntentFilter()
+        filter.addAction(BluetoothDevice.ACTION_FOUND)
+        filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
+        filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        registerReceiver(discoveryReceiver, filter)
     }
 
     private fun checkAndEnableBluetooth() {
-        // Verifique se o dispositivo suporta Bluetooth
         if (bluetoothAdapter == null) {
             Toast.makeText(this, "Dispositivo não suporta Bluetooth.", Toast.LENGTH_LONG).show()
             return
         }
         if (!bluetoothAdapter!!.isEnabled) {
-            // Se o Bluetooth não estiver ativado, inicie a atividade para ativar
             val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            enableBtLauncher.launch(enableBtIntent)
+             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                    enableBtLauncher.launch(enableBtIntent)
+                } else {
+                    // A solicitação de permissão lidará com o início da verificação ou ativação do BT
+                    checkPermissionsAndStartScan()
+                }
+            } else {
+                enableBtLauncher.launch(enableBtIntent)
+            }
         } else {
-            // Se o Bluetooth estiver ativado, prossiga para verificar as permissões
             checkPermissionsAndStartScan()
         }
     }
 
     private fun checkPermissionsAndStartScan() {
-        // Verifique se as permissões de escaneamento estão concedidas
-        val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            )
-        } else {
-            // Para versões anteriores a S, apenas a permissão de localização é necessária
-            arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION
-            )
+        val requiredPermissions = mutableListOf<String>()
+        // ACCESS_FINE_LOCATION é necessária para descoberta de dispositivos, mesmo para Bluetooth Clássico
+        requiredPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            requiredPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
+            requiredPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
         }
 
         val permissionsToRequest = requiredPermissions.filter {
-
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }.toTypedArray()
 
         if (permissionsToRequest.isEmpty()) {
-            // Se todas as permissões estiverem concedidas, inicie o escaneamento
-            startBluetoothSearch()
+            startBluetoothSearch() // Todas as permissões já concedidas
         } else {
-            // Se houver permissões não concedidas, solicite-as ao usuário
             requestMultiplePermissionsLauncher.launch(permissionsToRequest)
         }
     }
 
-    val foundDevices: MutableList<String> = mutableListOf()
-    val receiver = object : BroadcastReceiver() {
-        @SuppressLint("MissingPermission")
-        override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
+    @SuppressLint("MissingPermission") // As permissões são verificadas em checkPermissionsAndStartScan
+    private fun startBluetoothSearch() {
+        if (bluetoothAdapter?.isDiscovering == true) {
+            bluetoothAdapter!!.cancelDiscovery() // Cancela descoberta anterior, se houver
+        }
+
+        // Limpa listas antes de nova busca
+        deviceListStrings.clear()
+        discoveredDevicesList.clear()
+        devicesArrayAdapter.notifyDataSetChanged()
+
+        // Inicia a descoberta. O resultado será tratado pelo BroadcastReceiver.
+        val discoveryStarted = bluetoothAdapter?.startDiscovery()
+
+        if (discoveryStarted == true) {
+            Toast.makeText(this, "Iniciando busca por dispositivos Bluetooth...", Toast.LENGTH_LONG).show()
+            Log.d(TAG, "startDiscovery iniciada com sucesso.")
+        } else {
+            Toast.makeText(this, "Falha ao iniciar a busca por dispositivos.", Toast.LENGTH_LONG).show()
+            Log.e(TAG, "Falha ao iniciar startDiscovery. Verifique permissões e estado do Bluetooth.")
+        }
+    }
+
+    private val discoveryReceiver = object : BroadcastReceiver() {
+        @SuppressLint("MissingPermission") // As permissões são verificadas antes de chamar startDiscovery
+        override fun onReceive(context: Context?, intent: Intent) {
+            val action: String? = intent.action
+            when (action) {
+                BluetoothAdapter.ACTION_DISCOVERY_STARTED -> {
+                    Log.d(TAG, "Busca por dispositivos iniciada.")
+                    Toast.makeText(context, "Buscando...", Toast.LENGTH_SHORT).show()
+                }
                 BluetoothDevice.ACTION_FOUND -> {
                     val device: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     device?.let {
-                        val deviceName = it.name ?: "Dispositivo Desconhecido"
-                        val deviceAddress = it.address
-                        val deviceInfo = "$deviceName ($deviceAddress)"
-
-                        if (!foundDevices.contains(deviceInfo)) {
-                            foundDevices.add(deviceInfo)
-                            Toast.makeText(context, "Dispositivo encontrado: $deviceName", Toast.LENGTH_SHORT).show()
-                            // TODO: Adicionar lógica para atualizar a lista de dispositivos na sua UI
+onNullDevice -> // Renomeado para evitar conflito com o nome da classe
+                        val deviceName = onNullDevice.name
+                        val deviceAddress = onNullDevice.address
+                        // Adiciona apenas se tiver nome e não estiver na lista (para evitar duplicatas)
+                        if (deviceName != null && !discoveredDevicesList.any { it.address == deviceAddress }) {
+                            discoveredDevicesList.add(onNullDevice)
+                            deviceListStrings.add("$deviceName\n$deviceAddress")
+                            devicesArrayAdapter.notifyDataSetChanged()
+                            Log.i(TAG, "Dispositivo encontrado: $deviceName ($deviceAddress)")
                         }
+                    }
+                }
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
+                    Log.d(TAG, "Busca por dispositivos finalizada.")
+                    Toast.makeText(context, "Busca finalizada.", Toast.LENGTH_SHORT).show()
+                    if (discoveredDevicesList.isEmpty()) {
+                        Toast.makeText(context, "Nenhum dispositivo encontrado.", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
         }
-
     }
+
     override fun onDestroy() {
         super.onDestroy()
-        unregisterReceiver(receiver)
+        // Cancela a descoberta e remove o registro do receiver para evitar memory leaks
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            bluetoothAdapter?.cancelDiscovery()
+        }
+        unregisterReceiver(discoveryReceiver)
+        Log.d(TAG, "onDestroy: Descoberta cancelada e receiver desregistrado.")
     }
-    @SuppressLint("MissingPermission")
-    private fun startBluetoothSearch() {
-
-        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
-
-        registerReceiver(receiver, filter)
-        foundDevices.clear()
-        bluetoothAdapter?.startDiscovery()
-
-        Toast.makeText(this, "Iniciando busca por dispositivos Bluetooth...", Toast.LENGTH_LONG).show()
-
-    }
-
-
 }
